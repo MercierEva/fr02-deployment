@@ -1,0 +1,132 @@
+---
+- name: RabbitMQ server
+  hosts: mq
+  become: true
+  vars_files:
+    - secret_group_vars/pulsar.yml     # Pulsar + MQ Connections
+  pre_tasks:
+
+    - name: Update apt repo and cache on all Debian/Ubuntu boxes
+      apt: update_cache=yes force_apt_get=yes cache_valid_time=3600
+
+    - name: Upgrade all apt packages
+      apt: upgrade=yes force_apt_get=yes
+
+    - name: Install Python pip
+      apt: name={{ item }} update_cache=true state=present force_apt_get=yes
+      with_items:
+      - python3-pip
+      - python3-virtualenv
+      - firewalld
+
+    - name: Downgrade requirements to RabbitMQ
+      pip:
+        name:
+        - urllib3==1.26.17
+        - requests==2.28.1
+
+    - name: Set default version of Python
+      alternatives:
+        name: python
+        path: /usr/bin/python3
+
+    - name: Install docker pip package
+      ansible.builtin.pip:
+        name: docker
+
+    - name: Set docker_users (Docker role)
+      set_fact:
+        _docker_users: ['ubuntu']
+
+    - name: Configure SELinux
+      ansible.posix.seboolean:
+        name: "{{ item }}"
+        state: true
+        persistent: true
+      loop:
+        - httpd_can_network_connect
+
+    - name: Disable firewalld service
+      ansible.builtin.service:
+        name: firewalld
+        enabled: true
+        state: started
+
+    - name: Open ports for rabbitmq
+      ansible.posix.firewalld:
+        service: "{{ item }}"
+        permanent: true
+        state: enabled
+      loop:
+        - amqp
+        - amqps
+        - https
+        - http
+
+    - name: create group 'rabbitmq'
+      group:
+        name: rabbitmq
+        state: present
+        gid: 999
+
+    - name: create user 'rabbitmq'
+      user:
+        name: rabbitmq
+        state: present
+        uid: 999
+
+    - name: Set Ubuntu strings
+      set_fact:
+        group_src: "systemd-coredump:x:999:"
+        group_rpl: "systemd-coredump:x:500:"
+        user_src: "systemd-coredump:x:999:999:systemd Core Dumper:/:/usr/sbin/nologin"
+        user_rpl: "systemd-coredump:x:500:500:systemd Core Dumper:/:/usr/sbin/nologin"
+      when: ansible_distribution == 'Ubuntu'
+
+    - name: Search for 999 group
+      ansible.builtin.command: grep -Fxq "{{ group_src }}" /etc/group
+      ignore_errors: true
+      register: check_group
+      changed_when: false
+
+    - name: Replace in group file
+      ansible.builtin.lineinfile:
+        path: /etc/group
+        regexp: "{{ group_src }}"
+        line: "{{ group_rpl }}"
+      when: 'not ansible_check_mode and check_group.rc == 0'
+
+    - name: Search and replace 999 group files
+      ansible.builtin.command: "find / -mount -gid 999 -exec chgrp 500 '{}' +"
+      ignore_errors: true
+      when: check_group.rc == 0
+      tags:
+        - ignore_errors
+
+    - name: Search for 999 user
+      ansible.builtin.command: grep -Fxq "{{ user_src }}" /etc/passwd
+      ignore_errors: true
+      register: check_user
+      changed_when: false
+
+    - name: Replace in passwd file
+      ansible.builtin.lineinfile:
+        path: /etc/passwd
+        regexp: "{{ user_src }}"
+        line: "{{ user_rpl }}"
+      when: 'not ansible_check_mode and check_user.rc == 0'
+
+    - name: Search and replace 999 user files
+      ansible.builtin.command: "find / -mount -uid 999 -exec chown 500 '{}' +"
+      ignore_errors: true
+      when: check_user.rc == 0
+      tags:
+        - ignore_errors
+      
+
+  roles:
+    ## Starting configuration of the operating system
+    # Applications
+    - geerlingguy.docker
+    - galaxyproject.nginx
+    - usegalaxy_eu.rabbitmqserver
