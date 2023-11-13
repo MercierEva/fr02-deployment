@@ -1,0 +1,11 @@
+---
+bashrc_users:
+  - uname: ubuntu
+    uhome: /home/ubuntu
+    gname: ubuntu
+  - uname: pulsar
+    uhome: /opt/pulsar
+    gname: pulsar
+  - uname: root
+    uhome: /root
+    gname: root

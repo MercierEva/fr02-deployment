@@ -1,57 +1,26 @@
 ---
-hostname: rabbitmq-server
+mq_domain: galaxy-mq-dev.dev.ifb.local
 
-# nginx SSL Self-signed Certificate Configuration.
-mq_frontend_create_self_signed_cert: "true"
-mq_frontend_ssl_cert: "/etc/ssl/certs/{{ hostname }}.crt"
-mq_frontend_ssl_csr: "/etc/ssl/private/{{ hostname }}.csr"
-mq_frontend_ssl_key: "/etc/ssl/private/{{ hostname }}.key"
-
-
-# NGINX
 nginx_servers:
-  - rabbitmq
+  - galaxy-mq-dev
 nginx_ssl_servers:
-  - rabbitmq-ssl
-nginx_enable_default_server: false
-nginx_remove_default_vhost: true
-nginx_conf_http:
-  client_max_body_size: 1g
-  # gzip: "on" # This is enabled by default in Ubuntu, and the duplicate directive will cause a crash.
-  gzip_proxied: "any"
-  gzip_static: "on"   # The ngx_http_gzip_static_module module allows sending precompressed files with the ".gz" filename extension instead of regular files.
-  gzip_vary: "on"
-  gzip_min_length: 128
-  gzip_comp_level: 6  # Tradeoff of better compression for slightly more CPU time.
-  gzip_types: |
-      text/plain
-      text/css
-      text/xml
-      text/javascript
-      application/javascript
-      application/x-javascript
-      application/json
-      application/xml
-      application/xml+rss
-      application/xhtml+xml
-      application/x-font-ttf
-      application/x-font-opentype
-      image/png
-      image/svg+xml
-      image/x-icon
-
+  - galaxy-mq-dev-ssl
 nginx_ssl_role: galaxyproject.self_signed_certs
-nginx_conf_ssl_certificate: "{{ mq_frontend_ssl_cert }}"
-nginx_conf_ssl_certificate_key: "{{ mq_frontend_ssl_key }}"
+openssl_domains:
+  - "{{ mq_domain }}"
+openssl_self_sign: true # ADD THIS
 
+nginx_conf_ssl_certificate_key: /etc/ssl/private/{{ openssl_domains[0] }}.pem
+nginx_conf_ssl_certificate: /etc/ssl/certs/{{ openssl_domains[0] }}.crt
 #Install pip docker package for ansible
 pip_install_packages:
   - name: docker
+
 # RabbitMQ
 rabbitmq_container:
   name: rabbit_hole
   image: rabbitmq:3.11-management
-  hostname: "{{ hostname }}"
+  hostname: "{{ mq_domain }}"
 
 rabbitmq_plugins:
   - rabbitmq_management
@@ -62,11 +31,12 @@ rabbitmq_config:
   ssl_listeners:
     default: 5671
   ssl_options:
-    verify: verify_peer
-    cacertfile: "{{ mq_frontend_ssl_csr }}"
-    certfile: "{{ mq_frontend_ssl_cert }}"
-    keyfile: "{{ mq_frontend_ssl_key }}"
+    verify: verify_none
+    cacertfile: /etc/ssl/private/{{ openssl_domains[0] }}.csr
+    certfile: /etc/ssl/certs/{{ openssl_domains[0] }}.crt
+    keyfile: /etc/ssl/private/{{ openssl_domains[0] }}.pem
     fail_if_no_peer_cert: 'false'
+
   management_agent:
     disable_metrics_collector: "false"
   management:

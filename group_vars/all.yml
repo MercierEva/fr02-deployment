@@ -1,0 +1,71 @@
+pulsar_server_dir: /opt/pulsar
+pulsar_data_path: /opt/pulsar/files
+
+galaxy_server_hostname: "usegalaxy-dev.dev.ifb.local"
+pulsar_container_image_cache_path: "{{ pulsar_data_path }}/var/database/container_cache"
+
+copy_metrics_plugins: false
+metrics_plugins_to_copy:
+  - {'src': 'staging_time.py', 'dest': '/opt/pulsar/venv/lib/python2.7/site-packages/galaxy/jobs/metrics/instrumenters/staging_time.py'}
+
+#
+# Update hosts script parameters
+# the values here depend on what you have set up in your terraform configuration
+# see: https://github.com/usegalaxy-eu/pulsar-infrastructure/blob/master/tf/vars.tf
+# #
+# name_prefix: "vgcn-mira-"
+name_suffix: ".pulsar"
+private_network_prefix: "{{ condor_ip_range }}"
+workers_group_name: "workers"
+pulsar_pip_install: true
+pulsar_virtualenv_command: "python3 -m venv"
+pulsar_root: /opt/pulsar
+# pulsar_persistence_dir: /data/share/persisted_data
+# pulsar_staging_dir: /data/share/staging
+# pulsar_dependencies_dir: /data/share/tools
+pulsar_venv_dir: "{{ pulsar_root }}/venv3"
+pulsar_optional_dependencies:
+  - pyOpenSSL
+  # For remote transfers initiated on the Pulsar end rather than the Galaxy end
+  - pycurl
+  # drmaa required if connecting to an external DRM using it.
+  - drmaa
+  # kombu needed if using a message queue
+  - kombu
+  # amqp 5.0.3 changes behaviour in an unexpected way, pin for now.
+  - 'amqp==5.0.2'
+  # psutil and pylockfile are optional dependencies but can make Pulsar
+  # more robust in small ways.
+  - psutil
+  - uwsgi
+
+pulsar_pycurl_ssl_library: openssl
+pulsar_systemd: true
+pulsar_systemd_enabled: false
+pulsar_systemd_runner: webless
+
+
+pulsar_separate_privileges: true
+pulsar_create_user: true
+pulsar_user:
+  name: pulsar
+  create_home: false
+  shell: /bin/bash
+  home: "{{ pulsar_root }}"
+
+pulsar_yaml_config:
+  conda_auto_init: true
+  conda_auto_install: true
+  assign_ids: none
+  message_queue_url: "{{ mq_string }}"
+  min_polling_interval: 0.5
+  persistence_directory: "{{ pulsar_persistence_dir }}"
+  staging_directory: "{{ pulsar_staging_dir }}"
+  tool_dependency_dir: "{{ pulsar_dependencies_dir }}"
+  managers:
+    production:
+      submit_universe: vanilla
+      type: queued_condor
+    test:
+      submit_universe: vanilla
+      type: queued_condor

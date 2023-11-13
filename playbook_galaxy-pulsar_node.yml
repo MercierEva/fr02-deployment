@@ -1,0 +1,131 @@
+- name: Install HTCondor Execute Node on Pulsar
+  become: yes
+  hosts: node
+  vars_files: secret_group_vars/pulsar.yml
+  pre_tasks:
+
+    - name: Update apt repo and cache on all Debian/Ubuntu boxes
+      apt: update_cache=yes force_apt_get=yes cache_valid_time=3600
+
+    - name: Upgrade all apt packages
+      apt: upgrade=yes force_apt_get=yes
+
+    
+    - name: Install dependencies
+      become: true
+      apt:
+        name: "{{ item }}"
+        update_cache: yes
+        cache_valid_time: 3600
+        state: present
+      loop:
+        - git
+        - virtualenv
+        - python3
+        - python3-venv
+        - libcurl4-openssl-dev 
+        - libssl-dev
+        - python3-dev
+        - build-essential 
+        - gcc 
+        - firewalld
+        - autofs
+
+    - name: Create Pulsar user
+      user:
+        name: pulsar
+        state: present
+        home: /opt/pulsar
+        move_home: true
+
+
+
+    - name: Remove previous Install
+      become: yes
+      apt:
+        name: "{{ item }}"
+        purge: yes
+        state: absent
+        autoremove: yes
+        autoclean: yes
+      loop:
+        - htcondor
+        - condor
+    
+  roles:
+    - role: galaxyproject.cvmfs
+      become: yes
+    - name: galaxyproject.pulsar
+    - name: usegalaxy_eu.htcondor
+      vars:
+        condor_role: execute
+        condor_copy_template: false
+        condor_host: "{{ groups['pulsar'][0] }}"
+        condor_password: "{{ condor_pass }}"
+
+  tasks:
+    
+
+  post_tasks:
+
+    - name: Write /etc/condor/condor_config.local file
+      copy:
+        content: |
+          ALLOW_WRITE = *
+          ALLOW_READ = $(ALLOW_WRITE)
+          ALLOW_ADMINISTRATOR = *
+          ALLOW_NEGOTIATOR = $(ALLOW_ADMINISTRATOR)
+          ALLOW_CONFIG = $(ALLOW_ADMINISTRATOR)
+          ALLOW_DAEMON = $(ALLOW_ADMINISTRATOR)
+          ALLOW_OWNER = $(ALLOW_ADMINISTRATOR)
+          ALLOW_CLIENT = *
+          DAEMON_LIST = MASTER, SCHEDD, STARTD
+          FILESYSTEM_DOMAIN = vgcn
+          UID_DOMAIN = vgcn
+          TRUST_UID_DOMAIN = True
+          SOFT_UID_DOMAIN = True
+          # run with partitionable slots
+          CLAIM_PARTITIONABLE_LEFTOVERS = True
+          NUM_SLOTS = 1
+          NUM_SLOTS_TYPE_1 = 1
+          SLOT_TYPE_1 = 100%
+          SLOT_TYPE_1_PARTITIONABLE = True
+          ALLOW_PSLOT_PREEMPTION = False
+          STARTD.PROPORTIONAL_SWAP_ASSIGNMENT = True
+        owner: root
+        group: root
+        dest: /etc/condor/condor_config.local
+        mode: '0644'
+
+    - name: Write /etc/auto.master.d/data.autofs file
+      copy:
+        content: |
+          /data           /etc/auto.data          nfsvers=3
+        owner: root
+        group: root
+        dest: /etc/auto.master.d/data.autofs
+        mode: '0644'
+    - name: Write /etc/auto.data file
+      copy:
+        content: |
+          share  -rw,hard,intr,nosuid,quota  {{ groups['pulsar'][0] }}:/data/share
+        owner: root
+        group: root
+        dest: /etc/auto.data
+        mode: '0644'
+
+    - name: Run automount cli cmd
+      shell:
+        cmd: |
+          sh -xc "sed -i 's|nameserver 10.0.2.3||g' /etc/resolv.conf"
+    
+    - name: Disable pulsar
+      systemd:
+        name: pulsar
+        state: stopped 
+
+    - name: Start Condor service
+      systemd:
+        name: condor
+        state: started
+      

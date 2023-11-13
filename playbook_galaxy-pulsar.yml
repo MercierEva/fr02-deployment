@@ -1,132 +1,184 @@
----
-- name: RabbitMQ server
-  hosts: mq
-  become: true
+- name: Install HTCondor Central Manager on Pulsar
+  hosts: pulsar
+
   vars_files:
-    - secret_group_vars/pulsar.yml     # Pulsar + MQ Connections
-  pre_tasks:
+    - secret_group_vars/pulsar.yml
+    - group_vars/pulsar.yml
 
-    - name: Update apt repo and cache on all Debian/Ubuntu boxes
-      apt: update_cache=yes force_apt_get=yes cache_valid_time=3600
-
-    - name: Upgrade all apt packages
-      apt: upgrade=yes force_apt_get=yes
-
-    - name: Install Python Packages
-      apt: name={{ item }} update_cache=true state=present force_apt_get=yes
-      with_items:
-      - python3-pip
-      - python3-virtualenv
-      - firewalld
-
-    - name: Downgrade requirements to RabbitMQ
-      pip:
-        name:
-        - urllib3==1.26.17
-        - requests==2.28.1
-
-    - name: Install docker pip package
-      ansible.builtin.pip:
-        name: docker
-
-    - name: Set docker_users (Docker role)
-      set_fact:
-        _docker_users: ['ubuntu']
-
-    - name: Disable firewalld service
+  handlers:
+    - name: restart pulsar
+      become: yes
       ansible.builtin.service:
-        name: firewalld
-        enabled: true
-        state: started
+        name: pulsar
+        enabled: yes
+        state: restarted
 
-    - name: Open ports for rabbitmq
-      ansible.posix.firewalld:
-        service: "{{ item }}"
-        permanent: true
-        state: enabled
+  pre_tasks:
+    - name: Remove previous Install
+      become: yes
+      apt:
+        name: "{{ item }}"
+        purge: yes
+        state: absent
+        autoremove: yes
+        autoclean: yes
       loop:
-        - amqp
-        - amqps
-        - https
-        - http
-
-    - name: Set Ubuntu strings
-      set_fact:
-        group_src: "systemd-coredump:x:999:"
-        group_rpl: "systemd-coredump:x:500:"
-        user_src: "systemd-coredump:x:999:999:systemd Core Dumper:/:/usr/sbin/nologin"
-        user_rpl: "systemd-coredump:x:500:500:systemd Core Dumper:/:/usr/sbin/nologin"
-      when: ansible_distribution == 'Ubuntu'
-
-    - name: Search for 999 group
-      ansible.builtin.command: grep -Fxq "{{ group_src }}" /etc/group
-      ignore_errors: true
-      register: check_group
-      changed_when: false
-
-    - name: Replace in group file
-      ansible.builtin.lineinfile:
-        path: /etc/group
-        regexp: "{{ group_src }}"
-        line: "{{ group_rpl }}"
-      when: 'not ansible_check_mode and check_group.rc == 0'
-
-    - name: Search and replace 999 group files
-      ansible.builtin.command: "find / -mount -gid 999 -exec chgrp 500 '{}' +"
-      ignore_errors: true
-      when: check_group.rc == 0
-      tags:
-        - ignore_errors
-
-    - name: Search for 999 user
-      ansible.builtin.command: grep -Fxq "{{ user_src }}" /etc/passwd
-      ignore_errors: true
-      register: check_user
-      changed_when: false
-
-    - name: Replace in passwd file
-      ansible.builtin.lineinfile:
-        path: /etc/passwd
-        regexp: "{{ user_src }}"
-        line: "{{ user_rpl }}"
-      when: 'not ansible_check_mode and check_user.rc == 0'
-
-    - name: Search and replace 999 user files
-      ansible.builtin.command: "find / -mount -uid 999 -exec chown 500 '{}' +"
-      ignore_errors: true
-      when: check_user.rc == 0
-      tags:
-        - ignore_errors
-
-    - name: create group 'rabbitmq'
-      group:
-        name: rabbitmq
+        - htcondor
+        - condor
+    
+    - name: Install dependencies
+      become: true
+      apt:
+        name: "{{ item }}"
+        update_cache: yes
+        cache_valid_time: 3600
         state: present
-        gid: 999
+      loop:
+        - git
+        - virtualenv
+        - python3
+        - python3-venv
+        - libcurl4-openssl-dev 
+        - libssl-dev
+        - python3-dev
+        - build-essential 
+        - gcc 
+        - firewalld
+        - autofs
 
-    - name: create user 'rabbitmq'
+    - name: Create Pulsar user
       user:
-        name: rabbitmq
+        name: pulsar
         state: present
-        uid: 999
+        home: /opt/pulsar
+        move_home: true
 
-    - name: change access to repo private 
-      file:
-        path: "/etc/ssl/private/"
-        owner: rabbitmq
-        group: rabbitmq
-        state: directory
-        
-    - name: change access to  private key (size 4096 bits, type RSA)
-      openssl_privatekey:
-        path: "{{ mq_frontend_ssl_key }}"
-        owner: rabbitmq
-        group: rabbitmq
-
+    # - name : Remove repository HTCondor 
+    #   become: yes
+    #   shell:
+    #     cmd: rm -r /etc/
+    # - name: Create share repository
+    #   become: true
+    #   become_user: root
+    #   file:
+    #     path: /data/share
+    #     state: directory
+    #     owner: root
+    #     group: root
+    #     mode: '0644'
 
   roles:
-    ## Starting configuration of the operating system
-    # Applications
-    - geerlingguy.docker
-    - galaxyproject.nginx
-    - usegalaxy_eu.rabbitmqserver
+    - role: galaxyproject.cvmfs
+      become: yes
+    - name: galaxyproject.pulsar
+    - name: usegalaxy_eu.htcondor
+      vars:
+        condor_role: central-manager
+        condor_copy_template: false
+    - usegalaxy-eu.bashrc
+
+  tasks:
+    - name: import cron tasks
+      include_tasks: cron.yml
+
+    - name: import scripts tasks
+      import_tasks: scripts.yml
+      become: yes
+
+    - name: import metrics tasks
+      import_tasks: metrics.yml
+      become: yes
+
+    - name: Create container image cache path
+      file:
+        path: "{{ pulsar_container_image_cache_path }}"
+        state: directory
+        mode: '0775'
+        owner: pulsar
+        group: pulsar 
+      become: yes
+
+    - name: Copy Pulsar application configuration file
+      ansible.builtin.template:
+        src: "templates/app.yml.j2"
+        dest: "{{ pulsar_root }}/config/app.yml"
+        force: yes
+        backup: yes
+        mode: 0700
+        owner: pulsar
+        group: pulsar
+      notify: restart pulsar
+      become: yes
+
+  post_tasks:
+    - name: Creating condor config with content
+      copy:
+        dest: /etc/condor/condor_config.local
+        content: |
+          ALLOW_WRITE = *
+          ALLOW_READ = $(ALLOW_WRITE)
+          ALLOW_NEGOTIATOR = $(ALLOW_WRITE)
+          DAEMON_LIST = COLLECTOR, MASTER, NEGOTIATOR, SCHEDD
+          FILESYSTEM_DOMAIN = vgcn
+          UID_DOMAIN = vgcn
+          TRUST_UID_DOMAIN = True
+          SOFT_UID_DOMAIN = True
+        owner: root
+        group: root
+    
+    # - name: Create auto.master.d repository 
+    #   file:
+    #     path: /etc/auto.master.d/
+    #     state: directory
+    #     owner: root
+    #     group: root
+    #     mode: '0644'
+
+    - name: Creating condor config with content
+      copy:
+        dest: /etc/auto.master.d/data.autofs
+        content: |
+          /data           /etc/auto.data          nfsvers=3
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Creating condor config with content
+      copy:
+        dest: /etc/auto.data
+        content: |
+            share  -rw,hard,intr,nosuid,quota  {{ inventory_hostname }}:/data/share   
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Creating condor config with content
+      copy:
+        dest: /etc.intra-vgcn-key.ssh_config
+        content: |
+          Host *
+              GSSAPIAuthentication yes
+            ForwardX11Trusted yes
+            SendEnv LANG LC_CTYPE LC_NUMERIC LC_TIME LC_COLLATE LC_MONETARY LC_MESSAGES
+              SendEnv LC_PAPER LC_NAME LC_ADDRESS LC_TELEPHONE LC_MEASUREMENT
+              SendEnv LC_IDENTIFICATION LC_ALL LANGUAGE
+              SendEnv XMODIFIERS
+              StrictHostKeyChecking no
+              UserKnownHostsFile=/dev/null
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Add 2049/tcp permanent 
+      firewalld:
+        port: 2049/tcp
+        permanent: true
+        state: enabled
+    
+    - name: Always reload firewalld
+      service:
+        name: firewalld
+        state: reloaded
+
+
+    
